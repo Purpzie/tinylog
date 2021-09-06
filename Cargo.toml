@@ -1,0 +1,15 @@
+[package]
+name = "tinylog"
+version = "1.1.1"
+description = "Small logger"
+license = "ISC"
+authors = ["Purpzie"]
+repository = "https://github.com/purpzie/tinylog"
+edition = "2018"
+include = ["src/**/*.rs", "Cargo.toml", "README.md", "LICENSE"]
+
+[dependencies]
+atty = "0.2.14"
+humantime = { version = "2.1.0", optional = true }
+log = { version = "0.4.14", features = ["std"] }
+termcolor = "1.1.2"
