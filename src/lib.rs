@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![doc(html_root_url = "https://docs.rs/tinylog/1.2.0")]
+#![doc(html_root_url = "https://docs.rs/tinylog/1.2.1")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![allow(clippy::tabs_in_doc_comments)]

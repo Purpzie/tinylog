@@ -149,7 +149,17 @@ impl Config {
 		self
 	}
 
-	/// todo
+	/// Modify the target format.
+	///
+	/// By default, this is `(target)`.
+	///
+	/// # Example
+	/// ```
+	/// tinylog::config()
+	/// 	// use square brackets instead of round
+	/// 	.map_target(|target, f| write!(f, "[{}]", target))
+	/// 	.init();
+	/// ```
 	pub fn map_target<F>(mut self, map_target: F) -> Self
 	where
 		F: Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
@@ -158,7 +168,15 @@ impl Config {
 		self
 	}
 
-	/// todo
+	/// Modify the log content.
+	///
+	/// # Example
+	/// ```
+	/// tinylog::config()
+	/// 	// make the entire message uppercase
+	/// 	.map_content(|content, f| f.write_str(&content.to_uppercase()))
+	/// 	.init();
+	/// ```
 	pub fn map_content<F>(mut self, map_content: F) -> Self
 	where
 		F: Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
