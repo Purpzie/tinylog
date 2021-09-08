@@ -19,7 +19,10 @@ pub struct Config {
 	pub(super) level: LevelFilter,
 	level_is_default: bool,
 	pub(super) color: Option<ColorChoice>,
-	pub(super) filter: Option<Box<dyn Fn(&Metadata) -> bool + Send + Sync + 'static>>,
+	pub(super) filter: Option<crate::FilterFunc>,
+	pub(super) dim: Option<crate::FilterFunc>,
+	pub(super) map_target: Option<crate::MapFunc>,
+	pub(super) map_content: Option<crate::MapFunc>,
 }
 
 // can't derive because of trait object
@@ -48,6 +51,9 @@ impl Config {
 			level_is_default: true,
 			color: None,
 			filter: None,
+			dim: None,
+			map_target: None,
+			map_content: None,
 		}
 	}
 
@@ -121,6 +127,46 @@ impl Config {
 		self
 	}
 
+	/// Dim certain logs.
+	///
+	/// By default, `debug` and `trace` logs are dimmed.
+	/// Note that dimming doesn't work in a windows console.
+	///
+	/// # Example
+	/// ```
+	/// tinylog::config()
+	/// 	.dim(|metadata| {
+	/// 		// dim all logs from external crates
+	/// 		!metadata.target().starts_with(module_path!())
+	/// 	})
+	/// 	.init();
+	/// ```
+	pub fn dim<F>(mut self, dim: F) -> Self
+	where
+		F: Fn(&Metadata) -> bool + Send + Sync + 'static,
+	{
+		self.dim = Some(Box::new(dim));
+		self
+	}
+
+	/// todo
+	pub fn map_target<F>(mut self, map_target: F) -> Self
+	where
+		F: Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
+	{
+		self.map_target = Some(Box::new(map_target));
+		self
+	}
+
+	/// todo
+	pub fn map_content<F>(mut self, map_content: F) -> Self
+	where
+		F: Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
+	{
+		self.map_content = Some(Box::new(map_content));
+		self
+	}
+
 	/// Initialize the logger.
 	///
 	/// Any logs that occur before this are ignored.
@@ -164,6 +210,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::DisplayMap;
 
 	#[test]
 	fn rust_log() {
@@ -182,6 +229,9 @@ mod tests {
 		let mut config = Config::new().level(LevelFilter::Off);
 		config.options_init();
 		assert_eq!(config.level, LevelFilter::Off);
+		let mut config = Config::new().level(LevelFilter::Error);
+		config.options_init();
+		assert_eq!(config.level, LevelFilter::Error);
 	}
 
 	#[test]
@@ -202,11 +252,18 @@ mod tests {
 		let mut config = Config::new().color(ColorChoice::AlwaysAnsi);
 		config.options_init();
 		assert_eq!(config.color, Some(ColorChoice::AlwaysAnsi));
+		let mut config = Config::new().color(ColorChoice::Never);
+		config.options_init();
+		assert_eq!(config.color, Some(ColorChoice::Never));
 	}
 
 	#[test]
 	fn force_color() {
 		env::set_var("FORCE_COLOR", "1");
+		let mut config = Config::new().color(ColorChoice::Never);
+		config.options_init();
+		assert_eq!(config.color, Some(ColorChoice::Always));
+		env::set_var("NO_COLOR", "1");
 		let mut config = Config::new().color(ColorChoice::Never);
 		config.options_init();
 		assert_eq!(config.color, Some(ColorChoice::Always));
@@ -223,12 +280,31 @@ mod tests {
 
 	#[test]
 	fn filter() {
-		let config = Config::new().filter(|_| true);
-		if let Some(ref f) = config.filter {
-			let meta = Metadata::builder().build();
-			assert!(f(&meta));
-		} else {
-			panic!("config.filter is None");
-		}
+		let config = Config::new().filter(|m| m.target().starts_with("good"));
+		let filter = config.filter.unwrap();
+		assert!(filter(&Metadata::builder().target("good").build()));
+		assert!(!filter(&Metadata::builder().target("bad").build()));
+	}
+
+	#[test]
+	fn dim() {
+		let config = Config::new().dim(|m| m.target().starts_with("yes"));
+		let dim = config.dim.unwrap();
+		assert!(dim(&Metadata::builder().target("yes").build()));
+		assert!(!dim(&Metadata::builder().target("no").build()));
+	}
+
+	#[test]
+	fn map_target() {
+		let config = Config::new().map_target(|s, f| f.write_str(&s.to_uppercase()));
+		let display = DisplayMap(config.map_target.as_ref().unwrap(), "loud");
+		assert_eq!(format!("{}", display), "LOUD");
+	}
+
+	#[test]
+	fn map_content() {
+		let config = Config::new().map_content(|s, f| f.write_str(&s.to_lowercase()));
+		let display = DisplayMap(config.map_content.as_ref().unwrap(), "QUIET");
+		assert_eq!(format!("{}", display), "quiet");
 	}
 }
