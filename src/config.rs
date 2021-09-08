@@ -4,14 +4,12 @@ const DEFAULT_LEVEL: LevelFilter = LevelFilter::Debug;
 const DEFAULT_LEVEL: LevelFilter = LevelFilter::Info;
 
 use super::Logger;
-
+use log::{LevelFilter, Metadata};
 use std::{
 	env::{self, VarError},
 	fmt,
 	str::FromStr,
 };
-
-use log::{LevelFilter, Metadata};
 use termcolor::ColorChoice;
 
 /// Used to configure logging.

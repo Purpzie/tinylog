@@ -5,16 +5,15 @@
 #![allow(clippy::tabs_in_doc_comments)]
 
 mod config;
-pub use config::Config;
+pub use self::config::Config;
 
+use log::{Level, LevelFilter, Log, Metadata, Record};
 #[cfg(feature = "humantime")]
 use std::time::SystemTime;
 use std::{
 	io::{self, Write},
 	sync::Mutex,
 };
-
-use log::{Level, LevelFilter, Log, Metadata, Record};
 use termcolor::{BufferedStandardStream, Color, ColorChoice, ColorSpec, WriteColor};
 
 /// Initialize the logger.
@@ -101,10 +100,9 @@ impl Logger {
 
 		let mut stdout = self.stdout.lock().expect("stream poisoned");
 		#[cfg(feature = "humantime")]
-		{
-			stdout.set_color(ColorSpec::new().set_dimmed(true))?;
-			write!(stdout, "{} ", humantime::format_rfc3339_seconds(time))?;
-		}
+		stdout.set_color(ColorSpec::new().set_dimmed(true))?;
+		#[cfg(feature = "humantime")]
+		write!(stdout, "{} ", humantime::format_rfc3339_seconds(time))?;
 		stdout.set_color(&color)?;
 		write!(stdout, "{:>5} ", record.level())?;
 		stdout.set_color(&*color.set_bold(false))?;

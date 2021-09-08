@@ -5,8 +5,8 @@ description = "Small logger"
 license = "ISC"
 authors = ["Purpzie"]
 repository = "https://github.com/purpzie/tinylog"
-edition = "2018"
 include = ["src/**/*.rs", "Cargo.toml", "README.md", "LICENSE"]
+edition = "2018"
 
 [dependencies]
 atty = "0.2.14"
