@@ -27,13 +27,15 @@ jobs:
       - name: clippy
         run: |
           cargo clippy --lib --examples --all-features -- -D warnings
-          cargo clippy --lib --examples -D warnings
+          cargo clippy --lib --examples -- -D warnings
       - name: test
         env:
           FORCE_COLOR: true
         run: |
           cargo clippy --all-features --tests -- -D warnings
+          cargo clippy --tests -- -D warnings
           cargo test --all-features
+          cargo test
           cargo run --example example --all-features
           cargo run --example filter
       - name: fmt
