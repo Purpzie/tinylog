@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![doc(html_root_url = "https://docs.rs/tinylog/1.1.1")]
+#![doc(html_root_url = "https://docs.rs/tinylog/1.2.0")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![allow(clippy::tabs_in_doc_comments)]
@@ -140,9 +140,9 @@ impl Logger {
 		stdout.set_color(&*color.set_fg(None))?;
 		if let Some(ref func) = self.map_content {
 			let content = format!("{}", record.args());
-			write!(stdout, "{}", DisplayMap(func, &content))?;
+			writeln!(stdout, "{}", DisplayMap(func, &content))?;
 		} else {
-			write!(stdout, "{}", record.args())?;
+			writeln!(stdout, "{}", record.args())?;
 		}
 
 		stdout.reset()?;
