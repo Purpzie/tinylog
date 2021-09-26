@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![doc(html_root_url = "https://docs.rs/tinylog/1.2.1")]
+#![doc(html_root_url = "https://docs.rs/tinylog/1.2.2")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![allow(clippy::tabs_in_doc_comments)]
@@ -13,7 +13,7 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 #[cfg(feature = "humantime")]
 use std::time::SystemTime;
 use std::{
-	fmt,
+	fmt::{self, Write as WriteFmt},
 	io::{self, Write},
 };
 use termcolor::{BufferedStandardStream, Color, ColorChoice, ColorSpec, WriteColor};
@@ -58,6 +58,7 @@ struct Logger {
 	dim: Option<FilterFunc>,
 	map_target: Option<MapFunc>,
 	map_content: Option<MapFunc>,
+	content_buffer: Mutex<String>,
 	stdout: Mutex<BufferedStandardStream>,
 }
 
@@ -90,6 +91,7 @@ impl Logger {
 			dim: config.dim,
 			map_target: config.map_target,
 			map_content: config.map_content,
+			content_buffer: Mutex::new(String::new()),
 			stdout: Mutex::new(stdout),
 		}
 	}
@@ -118,28 +120,37 @@ impl Logger {
 			spec
 		};
 
-		#[cfg(not(feature = "parking_lot"))]
-		let mut stdout = self.stdout.lock().expect("stream poisoned");
-		#[cfg(feature = "parking_lot")]
 		let mut stdout = self.stdout.lock();
+		#[cfg(not(feature = "parking_lot"))]
+		let mut stdout = stdout.expect("stream poisoned");
 
 		#[cfg(feature = "humantime")]
-		stdout.set_color(ColorSpec::new().set_dimmed(true))?;
-		#[cfg(feature = "humantime")]
-		write!(stdout, "{} ", humantime::format_rfc3339_seconds(time))?;
+		{
+			stdout.set_color(ColorSpec::new().set_dimmed(true))?;
+			write!(stdout, "{} ", humantime::format_rfc3339_seconds(time))?;
+		}
+
 		stdout.set_color(&color)?;
 		write!(stdout, "{:>5} ", record.level())?;
 
-		stdout.set_color(&*color.set_bold(false))?;
+		stdout.set_color(color.set_bold(false))?;
 		if let Some(ref func) = self.map_target {
 			write!(stdout, "{} ", DisplayMap(func, record.target()))?;
 		} else {
 			write!(stdout, "({}) ", record.target())?;
 		}
 
-		stdout.set_color(&*color.set_fg(None))?;
+		stdout.set_color(color.set_fg(None))?;
 		if let Some(ref func) = self.map_content {
-			let content = format!("{}", record.args());
+			let mut content = self.content_buffer.lock();
+			#[cfg(not(feature = "parking_lot"))]
+			let mut content = content.expect("content buffer poisoned");
+			content.clear();
+			// returns a different error type, so we need to convert it
+			if let Err(err) = content.write_fmt(*record.args()) {
+				return Err(io::Error::new(io::ErrorKind::Other, err));
+			}
+
 			writeln!(stdout, "{}", DisplayMap(func, &content))?;
 		} else {
 			writeln!(stdout, "{}", record.args())?;

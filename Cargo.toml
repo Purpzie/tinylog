@@ -1,12 +1,15 @@
 [package]
 name = "tinylog"
-version = "1.2.1"
+version = "1.2.2"
 description = "Small logger"
 license = "ISC"
 authors = ["Purpzie"]
 repository = "https://github.com/purpzie/tinylog"
 include = ["src/**/*.rs", "Cargo.toml", "README.md", "LICENSE"]
 edition = "2018"
+
+[features]
+default = ["parking_lot"]
 
 [dependencies]
 atty = "0.2.14"
