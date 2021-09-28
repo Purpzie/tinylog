@@ -1,11 +1,11 @@
 use std::fmt::{self, Display};
 
-pub(super) struct DisplayMap<'a>(
-	pub &'a dyn Fn(&str, &mut fmt::Formatter) -> fmt::Result,
-	pub &'a str,
+pub(super) struct DisplayMap<'a, T: ?Sized>(
+	pub &'a dyn Fn(&T, &mut fmt::Formatter) -> fmt::Result,
+	pub &'a T,
 );
 
-impl Display for DisplayMap<'_> {
+impl<T: ?Sized> Display for DisplayMap<'_, T> {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		self.0(self.1, f)
 	}

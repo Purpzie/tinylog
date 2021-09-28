@@ -7,7 +7,7 @@ use super::Logger;
 use log::{LevelFilter, Metadata};
 use std::{
 	env::{self, VarError},
-	fmt,
+	fmt::{self, Arguments},
 	str::FromStr,
 };
 use termcolor::ColorChoice;
@@ -19,27 +19,31 @@ pub struct Config {
 	pub(super) level: LevelFilter,
 	level_is_default: bool,
 	pub(super) color: Option<ColorChoice>,
-	pub(super) filter: Option<crate::FilterFunc>,
-	pub(super) dim: Option<crate::FilterFunc>,
-	pub(super) map_target: Option<crate::MapFunc>,
-	pub(super) map_content: Option<crate::MapFunc>,
+	pub(super) filter: Option<crate::FilterFn>,
+	pub(super) dim: Option<crate::FilterFn>,
+	pub(super) map_target: Option<crate::MapTargetFn>,
+	pub(super) map_content: Option<crate::MapContentFn>,
 }
 
-// can't derive because of trait object
+// can't derive because of trait objects
 impl fmt::Debug for Config {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		const fn show_opt<T>(opt: &Option<T>) -> &'static str {
+			if opt.is_some() {
+				"Some(..)"
+			} else {
+				"None"
+			}
+		}
+
 		f.debug_struct("Config")
 			.field("level", &self.level)
 			.field("level_is_default", &self.level_is_default)
 			.field("color", &self.color)
-			.field(
-				"filter",
-				&if self.filter.is_some() {
-					Some(())
-				} else {
-					None
-				},
-			)
+			.field("filter", &show_opt(&self.filter))
+			.field("dim", &show_opt(&self.dim))
+			.field("map_target", &show_opt(&self.map_target))
+			.field("map_content", &show_opt(&self.map_content))
 			.finish()
 	}
 }
@@ -174,12 +178,16 @@ impl Config {
 	/// ```
 	/// tinylog::config()
 	/// 	// make the entire message uppercase
-	/// 	.map_content(|content, f| f.write_str(&content.to_uppercase()))
+	/// 	.map_content(move |args, f| {
+	/// 		let mut str = format!("{}", args);
+	/// 		str.make_ascii_uppercase();
+	/// 		f.write_str(&str)
+	/// 	})
 	/// 	.init();
 	/// ```
 	pub fn map_content<F>(mut self, map_content: F) -> Self
 	where
-		F: Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
+		F: Fn(&Arguments, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
 	{
 		self.map_content = Some(Box::new(map_content));
 		self
@@ -321,8 +329,10 @@ mod tests {
 
 	#[test]
 	fn map_content() {
-		let config = Config::new().map_content(|s, f| f.write_str(&s.to_lowercase()));
-		let display = DisplayMap(config.map_content.as_ref().unwrap(), "QUIET");
+		let config =
+			Config::new().map_content(|a, f| f.write_str(&format!("{}", a).to_lowercase()));
+		let val = format_args!("QUIET");
+		let display = DisplayMap(config.map_content.as_ref().unwrap(), &val);
 		assert_eq!(format!("{}", display), "quiet");
 	}
 }

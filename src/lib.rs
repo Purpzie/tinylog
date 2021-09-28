@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![doc(html_root_url = "https://docs.rs/tinylog/1.2.2")]
+#![doc(html_root_url = "https://docs.rs/tinylog/2.0.0")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![allow(clippy::tabs_in_doc_comments)]
@@ -13,7 +13,7 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 #[cfg(feature = "humantime")]
 use std::time::SystemTime;
 use std::{
-	fmt::{self, Write as WriteFmt},
+	fmt::{self, Arguments},
 	io::{self, Write},
 };
 use termcolor::{BufferedStandardStream, Color, ColorChoice, ColorSpec, WriteColor};
@@ -22,9 +22,6 @@ use termcolor::{BufferedStandardStream, Color, ColorChoice, ColorSpec, WriteColo
 use parking_lot::Mutex;
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
-
-type FilterFunc = Box<dyn Fn(&Metadata) -> bool + Send + Sync + 'static>;
-type MapFunc = Box<dyn Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static>;
 
 /// Initialize the logger.
 ///
@@ -52,13 +49,17 @@ pub fn config() -> Config {
 	Config::new()
 }
 
+type FilterFn = Box<dyn Fn(&Metadata) -> bool + Send + Sync + 'static>;
+type MapTargetFn = Box<dyn Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static>;
+type MapContentFn =
+	Box<dyn Fn(&Arguments, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static>;
+
 struct Logger {
 	level: LevelFilter,
-	filter: Option<FilterFunc>,
-	dim: Option<FilterFunc>,
-	map_target: Option<MapFunc>,
-	map_content: Option<MapFunc>,
-	content_buffer: Mutex<String>,
+	filter: Option<FilterFn>,
+	dim: Option<FilterFn>,
+	map_target: Option<MapTargetFn>,
+	map_content: Option<MapContentFn>,
 	stdout: Mutex<BufferedStandardStream>,
 }
 
@@ -91,7 +92,6 @@ impl Logger {
 			dim: config.dim,
 			map_target: config.map_target,
 			map_content: config.map_content,
-			content_buffer: Mutex::new(String::new()),
 			stdout: Mutex::new(stdout),
 		}
 	}
@@ -135,26 +135,17 @@ impl Logger {
 
 		stdout.set_color(color.set_bold(false))?;
 		if let Some(ref func) = self.map_target {
-			write!(stdout, "{} ", DisplayMap(func, record.target()))?;
+			write!(stdout, "{} ", DisplayMap(func, record.target()))
 		} else {
-			write!(stdout, "({}) ", record.target())?;
-		}
+			write!(stdout, "({}) ", record.target())
+		}?;
 
 		stdout.set_color(color.set_fg(None))?;
 		if let Some(ref func) = self.map_content {
-			let mut content = self.content_buffer.lock();
-			#[cfg(not(feature = "parking_lot"))]
-			let mut content = content.expect("content buffer poisoned");
-			content.clear();
-			// returns a different error type, so we need to convert it
-			if let Err(err) = content.write_fmt(*record.args()) {
-				return Err(io::Error::new(io::ErrorKind::Other, err));
-			}
-
-			writeln!(stdout, "{}", DisplayMap(func, &content))?;
+			writeln!(stdout, "{}", DisplayMap(func, record.args()))
 		} else {
-			writeln!(stdout, "{}", record.args())?;
-		}
+			writeln!(stdout, "{}", record.args())
+		}?;
 
 		stdout.reset()?;
 		stdout.flush()
