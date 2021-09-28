@@ -26,14 +26,12 @@ jobs:
           override: true
       - name: clippy
         run: |
-          cargo clippy --lib --examples --all-features -- -D warnings
-          cargo clippy --lib --examples -- -D warnings
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo clippy --all-targets -- -D warnings
       - name: test
         env:
           FORCE_COLOR: true
         run: |
-          cargo clippy --all-features --tests -- -D warnings
-          cargo clippy --tests -- -D warnings
           cargo test --all-features
           cargo test
           cargo run --example example --all-features
