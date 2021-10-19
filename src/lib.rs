@@ -1,5 +1,4 @@
 #![doc = include_str!("../README.md")]
-#![doc(html_root_url = "https://docs.rs/tinylog/2.0.0")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![allow(clippy::tabs_in_doc_comments)]
@@ -120,9 +119,10 @@ impl Logger {
 			spec
 		};
 
+		#[cfg(feature = "parking_lot")]
 		let mut stdout = self.stdout.lock();
 		#[cfg(not(feature = "parking_lot"))]
-		let mut stdout = stdout.expect("stream poisoned");
+		let mut stdout = self.stdout.lock().expect("stream poisoned");
 
 		#[cfg(feature = "humantime")]
 		{
