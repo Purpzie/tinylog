@@ -24,6 +24,8 @@ jobs:
           profile: minimal
           components: rustfmt, clippy
           override: true
+      - name: fmt
+        run: cargo fmt -- --check
       - name: clippy
         run: |
           cargo clippy --all-targets --all-features -- -D warnings
@@ -36,6 +38,3 @@ jobs:
           cargo test
           cargo run --example example --all-features
           cargo run --example filter
-      - name: fmt
-        if: ${{ always() }}
-        run: cargo fmt -- --check
