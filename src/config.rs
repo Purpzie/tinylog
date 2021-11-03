@@ -1,63 +1,69 @@
-#[cfg(debug_assertions)]
-const DEFAULT_LEVEL: LevelFilter = LevelFilter::Debug;
-#[cfg(not(debug_assertions))]
-const DEFAULT_LEVEL: LevelFilter = LevelFilter::Info;
-
-use super::Logger;
-use log::{LevelFilter, Metadata};
-use std::{
-	env::{self, VarError},
-	fmt::{self, Arguments},
-	str::FromStr,
-};
+use crate::{error::LogError, FormatFn, Logger};
+use log::{LevelFilter, Metadata, Record};
+use std::fmt::{self, Debug};
 use termcolor::ColorChoice;
 
-/// Used to configure logging.
+/// Configure logging.
 ///
 /// This is returned from [`tinylog::config()`](crate::config()).
 pub struct Config {
 	pub(super) level: LevelFilter,
-	level_is_default: bool,
-	pub(super) color: Option<ColorChoice>,
-	pub(super) filter: Option<crate::FilterFn>,
-	pub(super) dim: Option<crate::FilterFn>,
-	pub(super) map_target: Option<crate::MapTargetFn>,
-	pub(super) map_content: Option<crate::MapContentFn>,
+	pub(super) level_is_default: bool,
+	pub(super) color_choice: ColorChoice,
+	pub(super) filter: Option<Box<dyn Fn(&Metadata) -> bool + Send + Sync>>,
+	pub(super) dim: Option<Box<dyn Fn(&Record) -> bool + Send + Sync>>,
+	pub(super) display_level: Option<FormatFn>,
+	pub(super) display_target: Option<FormatFn>,
+	pub(super) display_content: Option<FormatFn>,
+	pub(super) on_error: Option<Box<dyn Fn(LogError) + Send + Sync>>,
 }
 
 // can't derive because of trait objects
-impl fmt::Debug for Config {
+impl Debug for Config {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		const fn show_opt<T>(opt: &Option<T>) -> &'static str {
-			if opt.is_some() {
-				"Some(..)"
-			} else {
-				"None"
+		// at least show whether something is present
+		struct DisplayOpt<'a, T>(&'a Option<T>);
+
+		impl<T> Debug for DisplayOpt<'_, T> {
+			fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+				f.write_str(match self.0 {
+					Some(_) => "Some(_)",
+					None => "None",
+				})
 			}
 		}
 
 		f.debug_struct("Config")
 			.field("level", &self.level)
-			.field("level_is_default", &self.level_is_default)
-			.field("color", &self.color)
-			.field("filter", &show_opt(&self.filter))
-			.field("dim", &show_opt(&self.dim))
-			.field("map_target", &show_opt(&self.map_target))
-			.field("map_content", &show_opt(&self.map_content))
+			.field("color_choice", &self.color_choice)
+			.field("filter", &DisplayOpt(&self.filter))
+			.field("dim", &DisplayOpt(&self.dim))
+			.field("display_level", &DisplayOpt(&self.display_level))
+			.field("display_target", &DisplayOpt(&self.display_target))
+			.field("display_content", &DisplayOpt(&self.display_content))
+			.field("handle_errors", &DisplayOpt(&self.on_error))
 			.finish()
 	}
 }
 
 impl Config {
 	pub(super) fn new() -> Self {
+		let level = if cfg!(debug_assertions) {
+			LevelFilter::Debug
+		} else {
+			LevelFilter::Info
+		};
+
 		Self {
-			level: DEFAULT_LEVEL,
+			level,
 			level_is_default: true,
-			color: None,
+			color_choice: ColorChoice::Auto,
 			filter: None,
 			dim: None,
-			map_target: None,
-			map_content: None,
+			display_level: None,
+			display_target: None,
+			display_content: None,
+			on_error: None,
 		}
 	}
 
@@ -113,21 +119,29 @@ impl Config {
 		self
 	}
 
-	/// Set the color level.
-	///
-	/// If this is set, color support won't be determined with [atty]. The environment variables
-	/// `NO_COLOR` and `FORCE_COLOR` will still apply, however.
+	/// Disable colors.
 	///
 	/// # Example
 	/// ```
-	/// # use termcolor::ColorChoice;
 	/// tinylog::config()
-	/// 	// never output colors
-	/// 	.color(ColorChoice::Never)
+	/// 	.no_color()
 	/// 	.init();
 	/// ```
-	pub fn color(mut self, color: ColorChoice) -> Self {
-		self.color = Some(color);
+	pub fn no_color(mut self) -> Self {
+		self.color_choice = ColorChoice::Never;
+		self
+	}
+
+	/// Always output colors.
+	///
+	/// # Example
+	/// ```
+	/// tinylog::config()
+	/// 	.force_color()
+	/// 	.init();
+	/// ```
+	pub fn force_color(mut self) -> Self {
+		self.color_choice = ColorChoice::Always;
 		self
 	}
 
@@ -147,28 +161,59 @@ impl Config {
 	/// ```
 	pub fn dim<F>(mut self, dim: F) -> Self
 	where
-		F: Fn(&Metadata) -> bool + Send + Sync + 'static,
+		F: Fn(&Record) -> bool + Send + Sync + 'static,
 	{
 		self.dim = Some(Box::new(dim));
 		self
 	}
 
-	/// Modify the target format.
-	///
-	/// By default, this is `(target)`.
+	/// Modify the level format.
 	///
 	/// # Example
 	/// ```
+	/// # use log::Level;
+	/// # use std::fmt::Write;
 	/// tinylog::config()
-	/// 	// use square brackets instead of round
-	/// 	.map_target(|target, f| write!(f, "[{}]", target))
+	/// 	.display_level(|record, f| {
+	/// 		// use lowercase instead of uppercase
+	/// 		f.write_str(match record.level() {
+	/// 			Level::Error => "error",
+	/// 			Level::Warn => "warn",
+	/// 			Level::Info => "info",
+	/// 			Level::Debug => "debug",
+	/// 			Level::Trace => "trace",
+	/// 		})
+	/// 	})
 	/// 	.init();
 	/// ```
-	pub fn map_target<F>(mut self, map_target: F) -> Self
+	pub fn display_level<F>(mut self, display_level: F) -> Self
 	where
-		F: Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
+		F: Fn(&Record, &mut crate::Formatter) -> fmt::Result + Send + Sync + 'static,
 	{
-		self.map_target = Some(Box::new(map_target));
+		self.display_level = Some(Box::new(display_level));
+		self
+	}
+
+	/// Modify the target format.
+	///
+	/// By default, this is ` (target) `.
+	///
+	/// # Example
+	/// ```
+	/// use std::fmt::Write;
+	///
+	/// tinylog::config()
+	/// 	// use square brackets instead of round
+	/// 	.display_target(|record, f| {
+	/// 		write!(f, " [{}] ", record.target())
+	/// 	})
+	/// 	.init();
+	/// ```
+	pub fn display_target<F>(mut self, display_target: F) -> Self
+	where
+		F: Fn(&Record, &mut crate::Formatter) -> fmt::Result + Send + Sync + 'static,
+	{
+		self.display_target = Some(Box::new(display_target));
 		self
 	}
 
@@ -176,20 +221,54 @@ impl Config {
 	///
 	/// # Example
 	/// ```
+	/// use std::fmt::Write;
+	///
 	/// tinylog::config()
 	/// 	// make the entire message uppercase
-	/// 	.map_content(move |args, f| {
-	/// 		let mut str = format!("{}", args);
+	/// 	.display_content(move |record, f| {
+	/// 		let mut str = format!("{}", record.args());
 	/// 		str.make_ascii_uppercase();
 	/// 		f.write_str(&str)
 	/// 	})
 	/// 	.init();
 	/// ```
-	pub fn map_content<F>(mut self, map_content: F) -> Self
+	pub fn display_content<F>(mut self, display_content: F) -> Self
 	where
-		F: Fn(&Arguments, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static,
+		F: Fn(&Record, &mut crate::Formatter) -> fmt::Result + Send + Sync + 'static,
 	{
-		self.map_content = Some(Box::new(map_content));
+		self.display_content = Some(Box::new(display_content));
+		self
+	}
+
+	/// Inspect any format/writing errors that occur.
+	///
+	/// Normally, these errors are ignored.
+	///
+	/// # Example
+	/// ```should_panic
+	/// # use std::fmt::{self, Display};
+	/// tinylog::config()
+	/// 	.on_error(|err| {
+	/// 		// maybe print it or log it to a file instead, etc
+	/// 		panic!("{}", err);
+	/// 	})
+	/// 	.init();
+	///
+	/// struct Invalid;
+	///
+	/// impl Display for Invalid {
+	/// 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+	/// 		Err(fmt::Error)
+	/// 	}
+	/// }
+	///
+	/// log::info!("{}", Invalid);
+	/// ```
+	pub fn on_error<F>(mut self, handle_errors: F) -> Self
+	where
+		F: Fn(LogError) + Send + Sync + 'static,
+	{
+		self.on_error = Some(Box::new(handle_errors));
 		self
 	}
 
@@ -202,137 +281,7 @@ impl Config {
 	/// // equivalent to tinylog::init();
 	/// tinylog::config().init();
 	/// ```
-	pub fn init(mut self) {
-		self.options_init();
-		log::set_max_level(self.level);
-		log::set_boxed_logger(Box::new(Logger::new(self))).unwrap();
-	}
-
-	fn options_init(&mut self) {
-		if env::var("FORCE_COLOR").is_ok() {
-			self.color = Some(ColorChoice::Always);
-		} else if env::var("NO_COLOR").is_ok() {
-			self.color = Some(ColorChoice::Never);
-		} else if self.color.is_none() && atty::is(atty::Stream::Stdout) {
-			self.color = Some(ColorChoice::Auto);
-		}
-
-		if self.level_is_default {
-			match env::var("RUST_LOG") {
-				Err(err) => match err {
-					VarError::NotPresent => (),
-					VarError::NotUnicode(_) => panic!("RUST_LOG must be valid unicode"),
-				},
-
-				Ok(value) => {
-					self.level = LevelFilter::from_str(&value)
-						.expect("RUST_LOG must be one of 'error, warn, info, debug, trace, off'")
-				}
-			}
-		}
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::DisplayMap;
-
-	#[test]
-	fn rust_log() {
-		env::set_var("RUST_LOG", "trace");
-		let mut config = Config::new();
-		config.options_init();
-		assert_eq!(config.level, LevelFilter::Trace);
-		env::set_var("RUST_LOG", "warn");
-		config.options_init();
-		assert_eq!(config.level, LevelFilter::Warn);
-	}
-
-	#[test]
-	fn ignore_rust_log() {
-		env::set_var("RUST_LOG", "warn");
-		let mut config = Config::new().level(LevelFilter::Off);
-		config.options_init();
-		assert_eq!(config.level, LevelFilter::Off);
-		let mut config = Config::new().level(LevelFilter::Error);
-		config.options_init();
-		assert_eq!(config.level, LevelFilter::Error);
-	}
-
-	#[test]
-	fn default_level() {
-		env::remove_var("RUST_LOG");
-		let mut config = Config::new().default_level(LevelFilter::Trace);
-		config.options_init();
-		assert_eq!(config.level, LevelFilter::Trace);
-		env::set_var("RUST_LOG", "error");
-		config.options_init();
-		assert_eq!(config.level, LevelFilter::Error);
-	}
-
-	#[test]
-	fn set_color_level() {
-		env::remove_var("FORCE_COLOR");
-		env::remove_var("NO_COLOR");
-		let mut config = Config::new().color(ColorChoice::AlwaysAnsi);
-		config.options_init();
-		assert_eq!(config.color, Some(ColorChoice::AlwaysAnsi));
-		let mut config = Config::new().color(ColorChoice::Never);
-		config.options_init();
-		assert_eq!(config.color, Some(ColorChoice::Never));
-	}
-
-	#[test]
-	fn force_color() {
-		env::set_var("FORCE_COLOR", "1");
-		let mut config = Config::new().color(ColorChoice::Never);
-		config.options_init();
-		assert_eq!(config.color, Some(ColorChoice::Always));
-		env::set_var("NO_COLOR", "1");
-		let mut config = Config::new().color(ColorChoice::Never);
-		config.options_init();
-		assert_eq!(config.color, Some(ColorChoice::Always));
-	}
-
-	#[test]
-	fn no_color() {
-		env::remove_var("FORCE_COLOR");
-		env::set_var("NO_COLOR", "1");
-		let mut config = Config::new().color(ColorChoice::Always);
-		config.options_init();
-		assert_eq!(config.color, Some(ColorChoice::Never));
-	}
-
-	#[test]
-	fn filter() {
-		let config = Config::new().filter(|m| m.target().starts_with("good"));
-		let filter = config.filter.unwrap();
-		assert!(filter(&Metadata::builder().target("good").build()));
-		assert!(!filter(&Metadata::builder().target("bad").build()));
-	}
-
-	#[test]
-	fn dim() {
-		let config = Config::new().dim(|m| m.target().starts_with("yes"));
-		let dim = config.dim.unwrap();
-		assert!(dim(&Metadata::builder().target("yes").build()));
-		assert!(!dim(&Metadata::builder().target("no").build()));
-	}
-
-	#[test]
-	fn map_target() {
-		let config = Config::new().map_target(|s, f| f.write_str(&s.to_uppercase()));
-		let display = DisplayMap(config.map_target.as_ref().unwrap(), "loud");
-		assert_eq!(format!("{}", display), "LOUD");
-	}
-
-	#[test]
-	fn map_content() {
-		let config =
-			Config::new().map_content(|a, f| f.write_str(&format!("{}", a).to_lowercase()));
-		let val = format_args!("QUIET");
-		let display = DisplayMap(config.map_content.as_ref().unwrap(), &val);
-		assert_eq!(format!("{}", display), "quiet");
+	pub fn init(self) {
+		Logger::init(self)
 	}
 }

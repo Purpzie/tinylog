@@ -1,38 +1,28 @@
 #![doc = include_str!("../README.md")]
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#![forbid(unsafe_code, rustdoc::broken_intra_doc_links)]
+#![warn(missing_docs, missing_debug_implementations)]
 #![allow(clippy::tabs_in_doc_comments)]
 
-mod config;
-mod map;
-pub use self::config::Config;
-use self::map::DisplayMap;
-
 use log::{Level, LevelFilter, Log, Metadata, Record};
+use termcolor::{Color, ColorChoice, ColorSpec};
+
 #[cfg(feature = "humantime")]
 use std::time::SystemTime;
 use std::{
-	fmt::{self, Arguments},
-	io::{self, Write},
+	cell::RefCell,
+	env,
+	fmt::{self, Write as _},
+	str::FromStr,
 };
-use termcolor::{BufferedStandardStream, Color, ColorChoice, ColorSpec, WriteColor};
 
-#[cfg(feature = "parking_lot")]
-use parking_lot::Mutex;
-#[cfg(not(feature = "parking_lot"))]
-use std::sync::Mutex;
+mod config;
+mod error;
+mod write;
+use crate::write::Writer;
+pub use crate::{config::Config, error::LogError, write::Formatter};
 
-/// Initialize the logger.
-///
-/// Any logs that occur before this are ignored.
-///
-/// # Example
-/// ```
-/// tinylog::init();
-/// ```
-pub fn init() {
-	config().init();
-}
+#[cfg(test)]
+mod tests;
 
 /// Configure logging.
 ///
@@ -48,106 +38,168 @@ pub fn config() -> Config {
 	Config::new()
 }
 
-type FilterFn = Box<dyn Fn(&Metadata) -> bool + Send + Sync + 'static>;
-type MapTargetFn = Box<dyn Fn(&str, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static>;
-type MapContentFn =
-	Box<dyn Fn(&Arguments, &mut fmt::Formatter) -> fmt::Result + Send + Sync + 'static>;
+/// Initialize the logger.
+///
+/// Any logs that occur before this are ignored.
+///
+/// # Example
+/// ```
+/// tinylog::init();
+/// ```
+pub fn init() {
+	config().init();
+}
+
+type FormatFn = Box<dyn Fn(&Record, &mut Formatter) -> fmt::Result + Send + Sync>;
 
 struct Logger {
 	level: LevelFilter,
-	filter: Option<FilterFn>,
-	dim: Option<FilterFn>,
-	map_target: Option<MapTargetFn>,
-	map_content: Option<MapContentFn>,
-	stdout: Mutex<BufferedStandardStream>,
+	output: Writer,
+	filter: Option<Box<dyn Fn(&Metadata) -> bool + Send + Sync>>,
+	dim: Option<Box<dyn Fn(&Record) -> bool + Send + Sync>>,
+	display_level: Option<FormatFn>,
+	display_target: Option<FormatFn>,
+	display_content: Option<FormatFn>,
+	on_error: Option<Box<dyn Fn(LogError) + Send + Sync>>,
+}
+
+impl Logger {
+	fn init(mut config: Config) {
+		if config.level_is_default {
+			if let Ok(level_str) = env::var("RUST_LOG") {
+				config.level = LevelFilter::from_str(&level_str)
+					.expect("RUST_LOG must be 'error', 'warn', 'info', 'debug', 'trace', or 'off'")
+			}
+		}
+
+		if config.color_choice == ColorChoice::Auto {
+			if env::var("FORCE_COLOR").is_ok() {
+				config.color_choice = ColorChoice::Always;
+			} else if env::var("NO_COLOR").is_ok()
+				|| cfg!(not(test)) && atty::isnt(atty::Stream::Stdout)
+			//   ^ this is why most tests are in ./tests.rs
+			{
+				config.color_choice = ColorChoice::Never;
+			}
+		}
+
+		let logger = Self {
+			level: config.level,
+			output: Writer::new(config.color_choice),
+			filter: config.filter,
+			dim: config.dim,
+			display_level: config.display_level,
+			display_target: config.display_target,
+			display_content: config.display_content,
+			on_error: config.on_error,
+		};
+
+		log::set_max_level(config.level);
+		log::set_boxed_logger(Box::new(logger)).expect("logger already set");
+	}
+
+	fn real_log(&self, mut buf: &mut Formatter, record: &Record) -> Result<(), LogError> {
+		let mut color = ColorSpec::new();
+
+		// timestamp
+		#[cfg(feature = "humantime")]
+		{
+			let time = SystemTime::now();
+			buf.set_color(color.set_dimmed(true))?;
+			write!(buf, "{} ", humantime::format_rfc3339_seconds(time))?;
+		}
+
+		color
+			.set_bold(true)
+			.set_fg(Some(match record.level() {
+				Level::Error => Color::Red,
+				Level::Warn => Color::Yellow,
+				Level::Info => Color::Green,
+				Level::Debug => Color::Blue,
+				Level::Trace => Color::Magenta,
+			}))
+			.set_dimmed(match self.dim {
+				None => record.level() >= Level::Debug,
+				Some(ref f) => f(record),
+			});
+
+		// level
+		buf.set_color(&color)?;
+		match self.display_level {
+			None => write!(buf, "{:>5}", record.level()),
+			Some(ref f) => f(record, &mut buf),
+		}?;
+
+		// target
+		buf.set_color(color.set_bold(false))?;
+		match self.display_target {
+			None => write!(buf, " ({}) ", record.target()),
+			Some(ref f) => f(record, &mut buf),
+		}?;
+
+		// content
+		buf.set_color(color.set_fg(None))?;
+		match self.display_content {
+			None => buf.write_fmt(*record.args()),
+			Some(ref f) => f(record, &mut buf),
+		}?;
+
+		buf.reset_color()?;
+		buf.write_str("\n")?;
+		self.output.print(buf)?;
+		Ok(())
+	}
+
+	fn force_log(&self, record: &Record) -> Result<(), LogError> {
+		self.real_log(&mut self.output.new_formatter(), record)
+	}
 }
 
 impl Log for Logger {
 	fn enabled(&self, meta: &Metadata) -> bool {
-		self.level >= meta.level()
-			&& if let Some(ref f) = self.filter {
-				f(meta)
-			} else {
-				true
+		let level_enabled = self.level >= meta.level();
+		if level_enabled {
+			if let Some(ref f) = self.filter {
+				return f(meta);
 			}
+		}
+		level_enabled
 	}
 
 	fn log(&self, record: &Record) {
-		if self.enabled(record.metadata()) {
-			self.real_log(record).expect("log error");
+		if !self.enabled(record.metadata()) {
+			return;
+		}
+
+		// instead of allocating a buffer for every log, use a buffer per thread
+		// see https://github.com/env-logger-rs/env_logger/blob/cb5375c/src/lib.rs#L922
+		thread_local! {
+			static BUFFER: RefCell<Option<Formatter>> = RefCell::new(None);
+		}
+
+		let result = BUFFER
+			.try_with(|cell| {
+				match cell.try_borrow_mut() {
+					Ok(mut option) => {
+						let buf = option.get_or_insert_with(|| self.output.new_formatter());
+						buf.clear();
+						self.real_log(buf, record)
+					}
+
+					// already borrowed
+					Err(_) => self.force_log(record),
+				}
+			})
+			.unwrap_or_else(|_| self.force_log(record));
+
+		if let Err(err) = result {
+			if let Some(ref f) = self.on_error {
+				f(err);
+			}
 		}
 	}
 
-	fn flush(&self) {}
-}
-
-impl Logger {
-	fn new(config: Config) -> Self {
-		let color = config.color.unwrap_or(ColorChoice::Never);
-		let stdout = BufferedStandardStream::stdout(color);
-		Self {
-			level: config.level,
-			filter: config.filter,
-			dim: config.dim,
-			map_target: config.map_target,
-			map_content: config.map_content,
-			stdout: Mutex::new(stdout),
-		}
-	}
-
-	fn real_log(&self, record: &Record) -> io::Result<()> {
-		#[cfg(feature = "humantime")]
-		let time = SystemTime::now();
-
-		let (color, mut should_dim) = match record.level() {
-			Level::Error => (Color::Red, false),
-			Level::Warn => (Color::Yellow, false),
-			Level::Info => (Color::Green, false),
-			Level::Debug => (Color::Blue, true),
-			Level::Trace => (Color::Cyan, true),
-		};
-
-		if let Some(ref func) = self.dim {
-			should_dim = func(record.metadata());
-		}
-
-		let mut color = {
-			let mut spec = ColorSpec::new();
-			spec.set_fg(Some(color))
-				.set_bold(true)
-				.set_dimmed(should_dim);
-			spec
-		};
-
-		#[cfg(feature = "parking_lot")]
-		let mut stdout = self.stdout.lock();
-		#[cfg(not(feature = "parking_lot"))]
-		let mut stdout = self.stdout.lock().expect("stream poisoned");
-
-		#[cfg(feature = "humantime")]
-		{
-			stdout.set_color(ColorSpec::new().set_dimmed(true))?;
-			write!(stdout, "{} ", humantime::format_rfc3339_seconds(time))?;
-		}
-
-		stdout.set_color(&color)?;
-		write!(stdout, "{:>5} ", record.level())?;
-
-		stdout.set_color(color.set_bold(false))?;
-		if let Some(ref func) = self.map_target {
-			write!(stdout, "{} ", DisplayMap(func, record.target()))
-		} else {
-			write!(stdout, "({}) ", record.target())
-		}?;
-
-		stdout.set_color(color.set_fg(None))?;
-		if let Some(ref func) = self.map_content {
-			writeln!(stdout, "{}", DisplayMap(func, record.args()))
-		} else {
-			writeln!(stdout, "{}", record.args())
-		}?;
-
-		stdout.reset()?;
-		stdout.flush()
+	fn flush(&self) {
+		// nothing
 	}
 }

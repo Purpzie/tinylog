@@ -2,8 +2,10 @@
 extern crate log;
 use std::env;
 
-fn main() {
+#[test]
+fn demo() {
 	env::set_var("RUST_LOG", "trace");
+	env::set_var("FORCE_COLOR", "1");
 	tinylog::init();
 	error!("test");
 	warn!("test");
