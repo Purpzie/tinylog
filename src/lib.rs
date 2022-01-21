@@ -1,11 +1,19 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code, rustdoc::broken_intra_doc_links)]
-#![warn(missing_docs, missing_debug_implementations)]
+#![warn(
+	missing_docs,
+	clippy::missing_docs_in_private_items,
+	missing_debug_implementations
+)]
 #![allow(clippy::tabs_in_doc_comments)]
 
-use log::{Level, LevelFilter, Log, Metadata, Record};
-use termcolor::{Color, ColorChoice, ColorSpec};
+mod config;
+mod error;
+mod write;
+use crate::write::Writer;
+pub use crate::{config::Config, error::LogError, write::Formatter};
 
+use log::{Level, LevelFilter, Log, Metadata, Record};
 #[cfg(feature = "humantime")]
 use std::time::SystemTime;
 use std::{
@@ -14,12 +22,7 @@ use std::{
 	fmt::{self, Write as _},
 	str::FromStr,
 };
-
-mod config;
-mod error;
-mod write;
-use crate::write::Writer;
-pub use crate::{config::Config, error::LogError, write::Formatter};
+use termcolor::{Color, ColorChoice, ColorSpec};
 
 #[cfg(test)]
 mod tests;
@@ -50,8 +53,10 @@ pub fn init() {
 	config().init();
 }
 
+/// Alias for a function that uses a [`Formatter`].
 type FormatFn = Box<dyn Fn(&Record, &mut Formatter) -> fmt::Result + Send + Sync>;
 
+#[allow(clippy::missing_docs_in_private_items)]
 struct Logger {
 	level: LevelFilter,
 	output: Writer,
@@ -64,8 +69,10 @@ struct Logger {
 }
 
 impl Logger {
+	/// Run on initialization.
 	fn init(mut config: Config) {
 		if config.level_is_default {
+			// can be overridden with this env var
 			if let Ok(level_str) = env::var("RUST_LOG") {
 				config.level = LevelFilter::from_str(&level_str)
 					.expect("RUST_LOG must be 'error', 'warn', 'info', 'debug', 'trace', or 'off'")
@@ -77,7 +84,7 @@ impl Logger {
 				config.color_choice = ColorChoice::Always;
 			} else if env::var("NO_COLOR").is_ok()
 				|| cfg!(not(test)) && atty::isnt(atty::Stream::Stdout)
-			//   ^ this is why most tests are in ./tests.rs
+			//   ^^^^^^^^^^^^^^^ this is why most tests are in ./tests.rs
 			{
 				config.color_choice = ColorChoice::Never;
 			}
@@ -98,7 +105,8 @@ impl Logger {
 		log::set_boxed_logger(Box::new(logger)).expect("logger already set");
 	}
 
-	fn real_log(&self, mut buf: &mut Formatter, record: &Record) -> Result<(), LogError> {
+	/// The true logging function.
+	fn real_log(&self, buf: &mut Formatter, record: &Record) -> Result<(), LogError> {
 		let mut color = ColorSpec::new();
 
 		// timestamp
@@ -127,21 +135,21 @@ impl Logger {
 		buf.set_color(&color)?;
 		match self.display_level {
 			None => write!(buf, "{:>5}", record.level()),
-			Some(ref f) => f(record, &mut buf),
+			Some(ref f) => f(record, buf),
 		}?;
 
 		// target
 		buf.set_color(color.set_bold(false))?;
 		match self.display_target {
 			None => write!(buf, " ({}) ", record.target()),
-			Some(ref f) => f(record, &mut buf),
+			Some(ref f) => f(record, buf),
 		}?;
 
 		// content
 		buf.set_color(color.set_fg(None))?;
 		match self.display_content {
 			None => buf.write_fmt(*record.args()),
-			Some(ref f) => f(record, &mut buf),
+			Some(ref f) => f(record, buf),
 		}?;
 
 		buf.reset_color()?;
@@ -150,6 +158,7 @@ impl Logger {
 		Ok(())
 	}
 
+	/// Forces a log to occur even if the thread-local formatter isn't available.
 	fn force_log(&self, record: &Record) -> Result<(), LogError> {
 		self.real_log(&mut self.output.new_formatter(), record)
 	}
@@ -171,7 +180,7 @@ impl Log for Logger {
 			return;
 		}
 
-		// instead of allocating a buffer for every log, use a buffer per thread
+		// instead of allocating a formatter (which is just a buffer) for every log, use one per thread
 		// see https://github.com/env-logger-rs/env_logger/blob/cb5375c/src/lib.rs#L922
 		thread_local! {
 			static BUFFER: RefCell<Option<Formatter>> = RefCell::new(None);
@@ -190,11 +199,12 @@ impl Log for Logger {
 					Err(_) => self.force_log(record),
 				}
 			})
+			// access error
 			.unwrap_or_else(|_| self.force_log(record));
 
 		if let Err(err) = result {
-			if let Some(ref f) = self.on_error {
-				f(err);
+			if let Some(ref f) = &self.on_error {
+				f(err)
 			}
 		}
 	}

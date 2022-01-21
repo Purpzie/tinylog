@@ -1,3 +1,5 @@
+//! Errors for this crate.
+
 use std::{
 	fmt::{self, Debug, Display, Error as FmtError},
 	io::Error as IoError,
@@ -5,6 +7,7 @@ use std::{
 
 /// An error that may occur while logging.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum LogError {
 	/// A [`fmt::Error`] occurred.
 	Fmt(FmtError),

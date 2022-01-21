@@ -1,3 +1,5 @@
+//! The [`Config`] struct.
+
 use crate::{error::LogError, FormatFn, Logger};
 use log::{LevelFilter, Metadata, Record};
 use std::fmt::{self, Debug};
@@ -6,6 +8,7 @@ use termcolor::ColorChoice;
 /// Configure logging.
 ///
 /// This is returned from [`tinylog::config()`](crate::config()).
+#[allow(clippy::missing_docs_in_private_items)]
 pub struct Config {
 	pub(super) level: LevelFilter,
 	pub(super) level_is_default: bool,
@@ -21,7 +24,7 @@ pub struct Config {
 // can't derive because of trait objects
 impl Debug for Config {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		// at least show whether something is present
+		/// Dummy struct to display options.
 		struct DisplayOpt<'a, T>(&'a Option<T>);
 
 		impl<T> Debug for DisplayOpt<'_, T> {
@@ -41,12 +44,13 @@ impl Debug for Config {
 			.field("display_level", &DisplayOpt(&self.display_level))
 			.field("display_target", &DisplayOpt(&self.display_target))
 			.field("display_content", &DisplayOpt(&self.display_content))
-			.field("handle_errors", &DisplayOpt(&self.on_error))
+			.field("on_error", &DisplayOpt(&self.on_error))
 			.finish()
 	}
 }
 
 impl Config {
+	/// Create a new default config.
 	pub(super) fn new() -> Self {
 		let level = if cfg!(debug_assertions) {
 			LevelFilter::Debug
@@ -148,7 +152,7 @@ impl Config {
 	/// Dim certain logs.
 	///
 	/// By default, `debug` and `trace` logs are dimmed.
-	/// Note that dimming doesn't work in a windows console.
+	/// Note that dimming doesn't work on windows.
 	///
 	/// # Example
 	/// ```
@@ -250,7 +254,7 @@ impl Config {
 	/// tinylog::config()
 	/// 	.on_error(|err| {
 	/// 		// maybe print it or log it to a file instead, etc
-	/// 		panic!("{}", err);
+	/// 		panic!("{err}");
 	/// 	})
 	/// 	.init();
 	///

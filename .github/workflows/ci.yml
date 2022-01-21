@@ -30,7 +30,7 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v2
       - name: Install rust
-        run: rustup update --no-self-update
+        run: rustup update
       - name: Fetch cache
         uses: Swatinem/rust-cache@v1
       - name: Test
@@ -44,7 +44,7 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v2
       - name: Install rust
-        run: rustup update --no-self-update
+        run: rustup update
       - name: Rustfmt
         run: cargo fmt -- --check
   docs:
@@ -54,7 +54,7 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v2
       - name: Install rust
-        run: rustup update --no-self-update
+        run: rustup update
       - name: Check docs
         run: cargo doc --no-deps
       - name: Check docs (all features)

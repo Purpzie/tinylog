@@ -1,3 +1,5 @@
+// because our tests need to capture output from stdout, we need to do some weird stuff
+
 use anyhow::{bail, ensure, Context};
 use log::{debug, error, info, trace, warn};
 use std::{env, fmt::Write, process};
@@ -27,7 +29,7 @@ where
 			"--quiet",
 			"--lib",
 			"--",
-			&format!("{}::{}", this_module, test_name),
+			&format!("{this_module}::{test_name}"),
 			"--exact",
 			"--nocapture",
 		])
@@ -41,13 +43,13 @@ where
 
 	if !result.status.success() {
 		let stderr = String::from_utf8(result.stderr).context("invalid utf8 in stderr")?;
-		bail!("child process failed\n{}\n{}", stdout, stderr);
+		bail!("child process failed\n{stdout}\n{stderr}");
 	}
 
 	match check(&stdout) {
 		Ok(()) => Ok(()),
 		Err(err) => {
-			bail!("{:?}\n{}", err, stdout);
+			bail!("{err:?}\n{stdout}");
 		}
 	}
 }
@@ -146,7 +148,7 @@ fn filter() -> Result {
 		|output| {
 			ensure!(!output.contains("if you see this, the test failed"));
 			for level in LEVEL_NAMES {
-				ensure!(output.contains(&format!("{} (good) this is fine", level)));
+				ensure!(output.contains(&format!("{level} (good) this is fine")));
 			}
 			Ok(())
 		},
@@ -172,7 +174,7 @@ fn display_level() -> Result {
 		},
 		|output| {
 			for level in LEVEL_NAMES.into_iter().map(|n| n.to_ascii_lowercase()) {
-				ensure!(output.contains(&format!("{} (test) test", level)));
+				ensure!(output.contains(&format!("{level} (test) test")));
 			}
 			Ok(())
 		},
@@ -192,7 +194,7 @@ fn display_target() -> Result {
 		},
 		|output| {
 			for level in LEVEL_NAMES {
-				ensure!(output.contains(&format!("{} foo [TARGET_NAME] test", level)));
+				ensure!(output.contains(&format!("{level} foo [TARGET_NAME] test")));
 			}
 			Ok(())
 		},
@@ -217,7 +219,7 @@ fn display_content() -> Result {
 		},
 		|output| {
 			for level in LEVEL_NAMES {
-				ensure!(output.contains(&format!("{} (test) SHOULD BE UPPERCASE", level)));
+				ensure!(output.contains(&format!("{level} (test) SHOULD BE UPPERCASE")));
 			}
 			Ok(())
 		},
