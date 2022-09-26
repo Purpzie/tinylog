@@ -2,10 +2,10 @@
 name = "tinylog"
 version = "4.0.0"
 license = "MIT"
+description = "A logger for my personal projects."
 authors = ["Purpzie"]
 include = ["src", "README.md", "LICENSE"]
 edition = "2021"
-publish = false
 
 [features]
 default = ["log", "detect-color", "detect-timezone"]
