@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: ["*"] # ignore pushes that are only tags
+  pull_request:
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v3
+      - name: Install rust
+        id: install_rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Fetch cache
+        uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        if: always() && steps.install_rust.outcome == 'success'
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Fmt
+        if: always() && steps.install_rust.outcome == 'success'
+        run: cargo fmt -- --check
+      - name: Check docs
+        if: always() && steps.install_rust.outcome == 'success'
+        run: cargo doc --all-features --no-deps
