@@ -5,7 +5,7 @@ use crate::{
 	util::{with_local_buf, Indented, StringLike},
 	Logger, PrefixOptions,
 };
-use std::{io, time::Instant};
+use std::io;
 use tracing::{
 	span::{Attributes, Record},
 	Event, Id, Subscriber,
@@ -18,7 +18,6 @@ use std::time::SystemTime;
 struct SpanData {
 	content: String,
 	prefix_end_index: usize,
-	timestamp: Instant,
 }
 
 impl<S, T: io::Write + Send + Sync + 'static> Layer<S> for Logger<T>
@@ -27,7 +26,6 @@ where
 {
 	fn on_new_span(&self, attrs: &Attributes, id: &Id, ctx: Context<S>) {
 		let span = ctx.span(id).expect("span missing");
-		let timestamp = Instant::now();
 
 		let mut content = String::new();
 		self.write_prefix(
@@ -46,7 +44,6 @@ where
 		extensions.insert(SpanData {
 			content,
 			prefix_end_index,
-			timestamp,
 		});
 	}
 
@@ -60,10 +57,8 @@ where
 	}
 
 	fn on_event(&self, event: &Event, ctx: Context<S>) {
-		let event_timestamp = Instant::now();
 		#[cfg(feature = "timestamps")]
 		let time = SystemTime::now();
-		let color = self.color;
 
 		with_local_buf(move |mut buf| {
 			buf.clear();
@@ -91,37 +86,6 @@ where
 					i_buf.push('\n');
 					i_buf.push_str(prefix);
 					i_buf.indent += 2;
-
-					// if at least 1 millisecond has passed, let's print it
-					let time_passed = event_timestamp - data.timestamp;
-					const NANOS_PER_MILLISECOND: u32 = 1_000_000;
-					if time_passed.subsec_nanos() >= NANOS_PER_MILLISECOND
-						|| time_passed.as_secs() > 0
-					{
-						let seconds = time_passed.as_secs();
-						let milliseconds = time_passed.subsec_millis();
-
-						i_buf.push(' ');
-						if color {
-							// dim
-							i_buf.push_str("\x1b[2m");
-						}
-						i_buf.push('(');
-						if seconds == 0 {
-							i_buf.push_str(itoa::Buffer::new().format(milliseconds));
-							i_buf.push('m');
-						} else {
-							i_buf.push_str(
-								ryu::Buffer::new()
-									.format((seconds as f64) + ((milliseconds as f64) / 1000.0)),
-							);
-						}
-						i_buf.push_str("s ago)");
-						if color {
-							// reset
-							i_buf.push_str("\x1b[m");
-						}
-					}
 
 					let name = span.name();
 					if !name.is_empty() {
