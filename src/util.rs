@@ -5,7 +5,7 @@ where
 	F: FnOnce(&mut String) -> R,
 {
 	thread_local! {
-		static BUF: RefCell<String> = RefCell::new(String::new());
+		static BUF: RefCell<String> = const { RefCell::new(String::new()) };
 	}
 
 	let mut f = Some(f);

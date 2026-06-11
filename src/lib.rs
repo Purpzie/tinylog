@@ -21,7 +21,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::tabs_in_doc_comments)]
 #![warn(missing_docs)]
-#![cfg_attr(docs_rs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #[cfg(all(not(feature = "log"), not(feature = "tracing")))]
 compile_error!("at least one of 'log' or 'tracing' features must be enabled");
 
