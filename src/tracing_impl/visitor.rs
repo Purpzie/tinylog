@@ -62,6 +62,6 @@ impl<T: StringLike + fmt::Write> Visit for FieldVisitor<T> {
 
 	fn record_f64(&mut self, field: &Field, value: f64) {
 		self.write_field(field);
-		self.0.push_str(ryu::Buffer::new().format(value));
+		self.0.push_str(zmij::Buffer::new().format(value));
 	}
 }
