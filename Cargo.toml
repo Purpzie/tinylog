@@ -1,27 +1,27 @@
 [package]
 name = "tinylog"
-version = "4.0.1"
+version = "4.0.2"
 license = "MIT"
 description = "A logger for my personal projects."
 authors = ["Purpzie"]
 include = ["src", "README.md", "LICENSE"]
-edition = "2021"
+edition = "2024"
 
 [features]
 default = ["log", "detect-color", "detect-timezone"]
 
 detect-color = ["supports-color"]
 detect-timezone = ["time?/local-offset"]
-log = ["dep:log"]
+log = ["dep:log", "log/kv"]
 parking_lot = ["dep:parking_lot"]
 timestamps = ["dep:time"]
-tracing = ["dep:ryu", "dep:tracing", "dep:tracing-subscriber"]
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 itoa = {version = "1.0.3", default-features = false}
 log = {optional = true, version = "0.4.17", default-features = false}
 parking_lot = {optional = true, version = "0.12.1", default-features = false}
-ryu = {optional = true, version = "1.0.11", default-features = false}
+zmij = {version = "1.0.21", default-features = false}
 supports-color = {optional = true, version = "3.0.0", default-features = false}
 time = {optional = true, version = "0.3.14", features = ["std"], default-features = false}
 tracing = {optional = true, version = "0.1.36", default-features = false}
@@ -29,4 +29,4 @@ tracing-subscriber = {optional = true, version = "0.3.15", features = ["std"], d
 
 [package.metadata.docs.rs]
 all-features = true
-rustdoc-args = ["--cfg", "docs_rs"]
+rustdoc-args = ["--cfg", "docsrs"]

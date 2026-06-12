@@ -1,29 +1,38 @@
-use std::{cell::RefCell, fmt};
+use std::{cell::Cell, fmt};
 
-pub(super) fn with_local_buf<F, R>(f: F) -> R
+/// Operate on an empty, reused, thread-local string. Falls back to a new one if it isn't available.
+pub(super) fn with_local_string<F, R>(f: F) -> R
 where
 	F: FnOnce(&mut String) -> R,
 {
+	// I'd use RefCell, but lifetimes are hard when you're trying to avoid all panics.
 	thread_local! {
-		static BUF: RefCell<String> = RefCell::new(String::new());
+		static GLOBAL_STR: Cell<Option<String>> = const { Cell::new(Some(String::new())) };
 	}
 
-	let mut f = Some(f);
-	BUF.try_with(|ref_cell| {
-		ref_cell
-			.try_borrow_mut()
-			.ok()
-			.map(|mut s| f.take().unwrap()(&mut s))
-	})
-	.ok()
-	.flatten()
-	.unwrap_or_else(|| f.take().unwrap()(&mut String::default()))
+	if let Some(mut s) = GLOBAL_STR.try_with(Cell::take).ok().flatten() {
+		let result = f(&mut s);
+
+		// If this fails, then our thread is probably shutting down.
+		// In that case it's fine for the shared string to be lost.
+		let _ = GLOBAL_STR.try_with(move |cell| {
+			s.clear();
+			cell.set(Some(s));
+		});
+
+		result
+	} else {
+		f(&mut String::new())
+	}
 }
 
 /// Similar to [`std::fmt::Write`], but with infallible methods.
 pub(super) trait StringLike {
+	/// Append a single character.
 	fn push(&mut self, c: char);
+	/// Append a string slice.
 	fn push_str(&mut self, s: &str);
+	/// Reserve capacity for `additional` more bytes.
 	fn reserve(&mut self, additional: usize);
 }
 
@@ -73,7 +82,7 @@ impl<T> Indented<T> {
 impl<T: StringLike> StringLike for Indented<T> {
 	fn push(&mut self, c: char) {
 		if c == '\n' {
-			self.output.reserve(self.indent + 1);
+			self.output.reserve(1 + self.indent);
 			self.output.push('\n');
 			for _ in 0..self.indent {
 				self.output.push(' ');
@@ -87,9 +96,8 @@ impl<T: StringLike> StringLike for Indented<T> {
 		let mut lines = s.split('\n');
 		if let Some(first_line) = lines.next() {
 			self.output.push_str(first_line);
-			let indent = self.indent + 1;
 			for line in lines {
-				self.output.reserve(indent + line.len());
+				self.output.reserve(1 + self.indent + line.len());
 				self.output.push('\n');
 				for _ in 0..self.indent {
 					self.output.push(' ');
