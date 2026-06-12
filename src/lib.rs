@@ -22,15 +22,17 @@
 #![allow(clippy::tabs_in_doc_comments)]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 #[cfg(all(not(feature = "log"), not(feature = "tracing")))]
 compile_error!("at least one of 'log' or 'tracing' features must be enabled");
 
 mod compat;
+mod util;
+
 #[cfg(feature = "log")]
 mod log_impl;
 #[cfg(feature = "tracing")]
 mod tracing_impl;
-mod util;
 
 use crate::{
 	compat::{Level, Metadata},
@@ -107,13 +109,15 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		}
 	}
 
+	/// Write the logging level, module info, and timestamp for a message.
 	fn write_prefix<S: StringLike>(
 		&self,
 		output: &mut S,
 		meta: &Metadata,
 		options: &PrefixOptions,
 	) {
-		let color = self.color;
+		// max possible length of level + module prefix
+		output.reserve(25 + meta.module_path.len());
 
 		let (icon, level_str, color_code) = match meta.level {
 			Level::Trace => ('→', "trace", '4'),
@@ -128,7 +132,7 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		}
 
 		// icon
-		if color {
+		if self.color {
 			// bright color
 			output.push_str("\x1b[9");
 			output.push(color_code);
@@ -138,12 +142,12 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		output.push(' ');
 
 		// level
-		if color {
+		if self.color {
 			// bold, underline
 			output.push_str("\x1b[1;4m");
 		}
 		output.push_str(level_str);
-		if color {
+		if self.color {
 			// reset, regular color
 			output.push_str("\x1b[;3");
 			output.push(color_code);
@@ -151,6 +155,7 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		}
 		output.push(' ');
 
+		// personal opinion: / is better than ::
 		let mut module_path_parts = meta.module_path.split("::");
 		if let Some(first_part) = module_path_parts.next() {
 			output.push_str(first_part);
@@ -161,7 +166,7 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		}
 
 		if let Some(line) = meta.line {
-			if color {
+			if self.color {
 				// dim
 				output.push_str("\x1b[2m");
 			}
@@ -172,13 +177,15 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		#[cfg(feature = "timestamps")]
 		if let Some(time) = options.time {
 			let time = time::OffsetDateTime::from(time).to_offset(self.timezone);
+			output.reserve(27);
 			output.push(' ');
-			if color {
+			if self.color {
 				// reset, dim
 				output.push_str("\x1b[;2m");
 			}
 
-			// this is the only place we ever format dates. we don't really need time's formatting feature
+			// this is the only place we ever format dates.
+			// time's formatting always allocates, so let's just do it ourselves
 			let mut hour = time.hour();
 			let mut am_or_pm = 'A';
 			if hour >= 12 {
@@ -200,7 +207,6 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 				output.push('0');
 			}
 			output.push_str(itoa::Buffer::new().format(second));
-			output.push('-');
 			output.push(am_or_pm);
 			output.push_str("M-");
 			output.push_str(itoa::Buffer::new().format(time.year()));
@@ -210,7 +216,7 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 			output.push_str(itoa::Buffer::new().format(time.day()));
 		}
 
-		if color {
+		if self.color {
 			// reset
 			output.push_str("\x1b[m");
 		}

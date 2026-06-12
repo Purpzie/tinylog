@@ -1,3 +1,6 @@
+//! This module unifies some structs from [`log`] and [`tracing`].
+
+/// Logging level.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Level {
 	Trace,
@@ -7,6 +10,7 @@ pub(super) enum Level {
 	Error,
 }
 
+/// Metadata about what's logging a message.
 pub(super) struct Metadata<'a> {
 	pub level: Level,
 	pub module_path: &'a str,

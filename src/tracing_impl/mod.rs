@@ -2,15 +2,15 @@ mod visitor;
 
 use self::visitor::FieldVisitor;
 use crate::{
-	util::{with_local_buf, Indented, StringLike},
 	Logger, PrefixOptions,
+	util::{Indented, StringLike, with_local_string},
 };
 use std::io;
 use tracing::{
-	span::{Attributes, Record},
 	Event, Id, Subscriber,
+	span::{Attributes, Record},
 };
-use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
+use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
 #[cfg(feature = "timestamps")]
 use std::time::SystemTime;
@@ -60,7 +60,7 @@ where
 		#[cfg(feature = "timestamps")]
 		let time = SystemTime::now();
 
-		with_local_buf(move |mut buf| {
+		with_local_string(move |mut buf| {
 			buf.clear();
 
 			self.write_prefix(

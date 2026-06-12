@@ -12,18 +12,18 @@ default = ["log", "detect-color", "detect-timezone"]
 
 detect-color = ["supports-color"]
 detect-timezone = ["time?/local-offset"]
-log = ["dep:log"]
+log = ["dep:log", "log/kv"]
 parking_lot = ["dep:parking_lot"]
 timestamps = ["dep:time"]
-tracing = ["dep:zmij", "dep:tracing", "dep:tracing-subscriber"]
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 itoa = {version = "1.0.3", default-features = false}
 log = {optional = true, version = "0.4.17", default-features = false}
 parking_lot = {optional = true, version = "0.12.1", default-features = false}
-zmij = {optional = true, version = "1.0.21", default-features = false}
+zmij = {version = "1.0.21", default-features = false}
 supports-color = {optional = true, version = "2.0.0", default-features = false}
-time = {optional = true, version = "0.3.14", features = ["std"], default-features = false}
+time = {optional = true, version = "0.3.14", features = ["std", "formatting", "macros"], default-features = false}
 tracing = {optional = true, version = "0.1.36", default-features = false}
 tracing-subscriber = {optional = true, version = "0.3.15", features = ["std"], default-features = false}
 
