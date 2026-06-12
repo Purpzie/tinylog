@@ -5,6 +5,7 @@ license = "MIT"
 description = "A logger for my personal projects."
 authors = ["Purpzie"]
 include = ["src", "README.md", "LICENSE"]
+repository = "https://github.com/purpzie/tinylog"
 edition = "2024"
 
 [features]
