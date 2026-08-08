@@ -1,6 +1,6 @@
 [package]
 name = "tinylog"
-version = "4.0.3"
+version = "4.0.4"
 license = "MIT"
 description = "A logger for my personal projects."
 authors = ["Purpzie"]
@@ -11,7 +11,7 @@ edition = "2024"
 [features]
 default = ["log", "detect-color", "detect-timezone"]
 
-detect-color = ["supports-color"]
+detect-color = ["dep:supports-color"]
 detect-timezone = ["time?/local-offset"]
 log = ["dep:log", "log/kv"]
 parking_lot = ["dep:parking_lot"]
@@ -31,3 +31,7 @@ tracing-subscriber = {optional = true, version = "0.3.15", features = ["std"], d
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "example"
+required-features = ["log/std"]

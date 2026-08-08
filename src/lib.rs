@@ -116,11 +116,9 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		meta: &Metadata,
 		options: &PrefixOptions,
 	) {
-		// max possible length of level + module prefix
-		output.reserve(25 + meta.module_path.len());
-
+		// https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
 		let (icon, level_str, color_code) = match meta.level {
-			Level::Trace => ('→', "trace", '4'),
+			Level::Trace => ('→', "trace", '5'),
 			Level::Debug => ('○', "debug", '6'),
 			Level::Info => ('●', "info", '2'),
 			Level::Warn => ('⚠', "warn", '3'),
@@ -139,14 +137,62 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 			output.push('m');
 		}
 		output.push(icon);
-		output.push(' ');
 
 		// level
 		if self.color {
 			// bold, underline
-			output.push_str("\x1b[1;4m");
+			output.push_str(" \x1b[1;4m");
+		} else {
+			output.push(' ');
 		}
 		output.push_str(level_str);
+
+		let mut int_buf = itoa::Buffer::new();
+
+		#[cfg(feature = "timestamps")]
+		if let Some(time) = options.time {
+			if self.color {
+				// reset, dim
+				output.push_str("\x1b[;2m ");
+			} else {
+				output.push(' ');
+			}
+
+			let time = time::OffsetDateTime::from(time).to_offset(self.timezone);
+
+			// this is the only place we ever format dates.
+			// time's formatting always allocates, so let's just do it manually instead.
+			let mut hour = time.hour();
+			let mut am_or_pm = "AM ";
+			if hour >= 12 {
+				am_or_pm = "PM ";
+				if hour != 12 {
+					hour -= 12;
+				}
+			}
+			output.push_str(int_buf.format(hour));
+			let minute = time.minute();
+			if minute < 10 {
+				output.push_str(":0");
+			} else {
+				output.push(':');
+			}
+			output.push_str(int_buf.format(minute));
+			let second = time.second();
+			if second < 10 {
+				output.push_str(":0");
+			} else {
+				output.push(':');
+			}
+			output.push_str(int_buf.format(second));
+			output.push_str(am_or_pm);
+			output.push_str(int_buf.format(time.year()));
+			output.push('/');
+			output.push_str(int_buf.format(time.month() as u8));
+			output.push('/');
+			output.push_str(int_buf.format(time.day()));
+		}
+
 		if self.color {
 			// reset, regular color
 			output.push_str("\x1b[;3");
@@ -171,49 +217,7 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 				output.push_str("\x1b[2m");
 			}
 			output.push(':');
-			output.push_str(itoa::Buffer::new().format(line));
-		}
-
-		#[cfg(feature = "timestamps")]
-		if let Some(time) = options.time {
-			let time = time::OffsetDateTime::from(time).to_offset(self.timezone);
-			output.reserve(27);
-			output.push(' ');
-			if self.color {
-				// reset, dim
-				output.push_str("\x1b[;2m");
-			}
-
-			// this is the only place we ever format dates.
-			// time's formatting always allocates, so let's just do it ourselves
-			let mut hour = time.hour();
-			let mut am_or_pm = 'A';
-			if hour >= 12 {
-				am_or_pm = 'P';
-				if hour != 12 {
-					hour -= 12;
-				}
-			}
-			output.push_str(itoa::Buffer::new().format(hour));
-			output.push(':');
-			let minute = time.minute();
-			if minute < 10 {
-				output.push('0');
-			}
-			output.push_str(itoa::Buffer::new().format(minute));
-			output.push(':');
-			let second = time.second();
-			if second < 10 {
-				output.push('0');
-			}
-			output.push_str(itoa::Buffer::new().format(second));
-			output.push(am_or_pm);
-			output.push_str("M-");
-			output.push_str(itoa::Buffer::new().format(time.year()));
-			output.push('/');
-			output.push_str(itoa::Buffer::new().format(time.month() as u8));
-			output.push('/');
-			output.push_str(itoa::Buffer::new().format(time.day()));
+			output.push_str(int_buf.format(line));
 		}
 
 		if self.color {

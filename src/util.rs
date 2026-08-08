@@ -36,7 +36,10 @@ pub(super) trait StringLike {
 	fn reserve(&mut self, additional: usize);
 }
 
-impl<T: StringLike> StringLike for &mut T {
+impl<T> StringLike for &mut T
+where
+	T: StringLike,
+{
 	fn push(&mut self, c: char) {
 		(**self).push(c);
 	}
