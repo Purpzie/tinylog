@@ -93,7 +93,7 @@ impl<T: StringLike> StringLike for Indented<T> {
 	}
 
 	fn push_str(&mut self, s: &str) {
-		let mut lines = s.lines();
+		let mut lines = s.split('\n');
 		if let Some(first_line) = lines.next() {
 			self.output.push_str(first_line);
 			for line in lines {
