@@ -1,7 +1,9 @@
 use crate::{
 	Logger, PrefixOptions,
-	util::{Indented, StringLike, with_local_string},
+	util::{Indented, MutexHelper, StringLike, with_local_string},
 };
+#[cfg(feature = "timestamps")]
+use std::time::SystemTime;
 use std::{fmt, io};
 use tracing::{
 	Event, Id, Subscriber,
@@ -10,22 +12,19 @@ use tracing::{
 };
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
-#[cfg(feature = "timestamps")]
-use std::time::SystemTime;
-
 struct SpanData {
 	content: String,
 	prefix_end_index: usize,
 }
 
-impl<S, T: io::Write + Send + Sync + 'static> Layer<S> for Logger<T>
+impl<S, T> Layer<S> for Logger<T>
 where
+	T: io::Write + 'static,
 	S: Subscriber + for<'any> LookupSpan<'any>,
 {
 	fn on_new_span(&self, attrs: &Attributes, id: &Id, ctx: Context<S>) {
-		let span = ctx.span(id).expect("span missing");
-
 		let mut content = String::new();
+
 		self.write_prefix(
 			&mut content,
 			&attrs.metadata().into(),
@@ -35,23 +34,29 @@ where
 				time: None,
 			},
 		);
-		let prefix_end_index = content.len();
-		attrs.record(&mut FieldVisitor::new(&mut content));
 
-		let mut extensions = span.extensions_mut();
-		extensions.insert(SpanData {
-			content,
-			prefix_end_index,
-		});
+		let prefix_end_index = content.len();
+		attrs.record(&mut FieldVisitor(&mut content));
+
+		ctx.span(id)
+			.expect("span missing")
+			.extensions_mut()
+			.insert(SpanData {
+				content,
+				prefix_end_index,
+			});
 	}
 
 	fn on_record(&self, id: &Id, values: &Record, ctx: Context<S>) {
-		let span = ctx.span(id).expect("span missing");
-		let mut extensions = span.extensions_mut();
-		let data: &mut SpanData = extensions
-			.get_mut()
-			.expect("span missing SpanData extension");
-		values.record(&mut FieldVisitor::new(&mut data.content));
+		values.record(&mut FieldVisitor(
+			&mut ctx
+				.span(id)
+				.expect("span missing")
+				.extensions_mut()
+				.get_mut::<SpanData>()
+				.expect("span missing SpanData extension")
+				.content,
+		));
 	}
 
 	fn on_event(&self, event: &Event, ctx: Context<S>) {
@@ -59,8 +64,6 @@ where
 		let time = SystemTime::now();
 
 		with_local_string(move |mut buf| {
-			buf.clear();
-
 			self.write_prefix(
 				&mut buf,
 				&event.metadata().into(),
@@ -71,66 +74,80 @@ where
 				},
 			);
 
-			let mut i_buf = Indented::new(&mut buf, 8);
-			event.record(&mut FieldVisitor::new(&mut i_buf));
+			let mut i_buf = Indented::new(&mut buf, Self::PREFIX_LABEL_LEN);
+			event.record(&mut FieldVisitor(&mut i_buf));
 
-			if let Some(parent_span) = ctx.event_span(event) {
-				for span in parent_span.scope() {
-					let extensions = span.extensions();
-					let data: &SpanData =
-						extensions.get().expect("span missing SpanData extension");
-					let (prefix, fields) = data.content.split_at(data.prefix_end_index);
-					i_buf.indent -= 2;
+			for span in ctx.event_scope(event).into_iter().flatten() {
+				let extensions = span.extensions();
+				let data: &SpanData = extensions.get().expect("span missing SpanData extension");
+				let (prefix, fields) = data.content.split_at(data.prefix_end_index);
+				i_buf.indent -= 2;
+				i_buf.push('\n');
+				i_buf.push_str(prefix);
+				i_buf.indent += 2;
+				let name = span.name();
+				if !name.is_empty() {
 					i_buf.push('\n');
-					i_buf.push_str(prefix);
-					i_buf.indent += 2;
-
-					let name = span.name();
-					if !name.is_empty() {
-						i_buf.push('\n');
-						i_buf.push_str(name);
-					}
-					i_buf.push_str(fields);
+					i_buf.push_str(name);
 				}
+				i_buf.push_str(fields);
 			}
 
 			buf.push('\n');
-			#[allow(unused_mut)]
-			let mut output = self.output.lock();
-			#[cfg(not(feature = "parking_lot"))]
-			let mut output = output.unwrap_or_else(|e| e.into_inner());
-			output.write_all(buf.as_bytes()).expect("io error");
+			self.output
+				.lock_ignore_poison()
+				.write_all(buf.as_bytes())
+				.expect("io error");
 		})
 	}
 }
 
-struct FieldVisitor<T: StringLike + fmt::Write>(T);
-
-impl<T: StringLike + fmt::Write> FieldVisitor<T> {
-	pub fn new(output: T) -> Self {
-		Self(output)
+impl<S, T> Layer<S> for &'static Logger<T>
+where
+	T: io::Write + 'static,
+	S: Subscriber + for<'any> LookupSpan<'any>,
+{
+	fn on_new_span(&self, attrs: &Attributes, id: &Id, ctx: Context<S>) {
+		(*self).on_new_span(attrs, id, ctx)
 	}
 
-	fn write_field<'a>(&mut self, field: &'a Field) -> &'a str {
+	fn on_record(&self, id: &Id, values: &Record, ctx: Context<S>) {
+		(*self).on_record(id, values, ctx)
+	}
+
+	fn on_event(&self, event: &Event, ctx: Context<S>) {
+		(*self).on_event(event, ctx)
+	}
+}
+
+struct FieldVisitor<T>(T);
+
+impl<T> FieldVisitor<T>
+where
+	T: StringLike,
+{
+	fn write_field(&mut self, field: &Field) {
 		self.0.push('\n');
 		let name = field.name();
 		if name != "message" {
 			self.0.push_str(name);
 			self.0.push_str(": ");
 		}
-		name
 	}
 }
 
-impl<T: StringLike + fmt::Write> Visit for FieldVisitor<T> {
+impl<T> Visit for FieldVisitor<T>
+where
+	T: StringLike + fmt::Write,
+{
 	fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
 		self.write_field(field);
 		write!(self.0, "{value:?}").expect("fmt error");
 	}
 
 	fn record_str(&mut self, field: &Field, value: &str) {
-		let name = self.write_field(field);
-		if name == "message" {
+		self.write_field(field);
+		if field.name() == "message" {
 			self.0.push_str(value);
 		} else {
 			write!(self.0, "{value:?}").expect("fmt error");

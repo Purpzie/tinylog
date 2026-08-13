@@ -1,24 +1,25 @@
 use crate::{
 	Logger, PrefixOptions,
-	util::{Indented, StringLike, with_local_string},
+	util::{Indented, MutexHelper, StringLike, with_local_string},
 };
 use log::{Log, kv};
-use std::{fmt, io};
-
 #[cfg(feature = "timestamps")]
 use std::time::SystemTime;
+use std::{fmt, io};
 
-impl<T: io::Write + Send + Sync + 'static> Log for Logger<T> {
+impl<T> Log for Logger<T>
+where
+	T: io::Write + Send,
+{
 	fn enabled(&self, _: &log::Metadata) -> bool {
 		true
 	}
 
 	fn flush(&self) {
-		#[allow(unused_mut)]
-		let mut output = self.output.lock();
-		#[cfg(not(feature = "parking_lot"))]
-		let mut output = output.unwrap_or_else(|e| e.into_inner());
-		output.flush().expect("failed to flush log output");
+		self.output
+			.lock_ignore_poison()
+			.flush()
+			.expect("failed to flush log output");
 	}
 
 	fn log(&self, record: &log::Record) {
@@ -26,8 +27,6 @@ impl<T: io::Write + Send + Sync + 'static> Log for Logger<T> {
 		let time = SystemTime::now();
 
 		with_local_string(move |mut buf| {
-			buf.clear();
-
 			self.write_prefix(
 				&mut buf,
 				&record.into(),
@@ -38,39 +37,42 @@ impl<T: io::Write + Send + Sync + 'static> Log for Logger<T> {
 				},
 			);
 
-			let mut indented = Indented::new(&mut buf, 8);
+			let mut i_buf = Indented::new(&mut buf, Self::PREFIX_LABEL_LEN);
 			let args = record.args();
 			match args.as_str() {
-				Some(str) if !str.is_empty() => {
-					indented.reserve(1 + str.len());
-					indented.push('\n');
-					indented.push_str(str);
+				Some(str) => {
+					if !str.is_empty() {
+						i_buf.reserve(1 + str.len());
+						i_buf.push('\n');
+						i_buf.push_str(str);
+					}
 				},
 				None => {
-					indented.push('\n');
-					fmt::Write::write_fmt(&mut indented, *args).expect("fmt error");
+					i_buf.push('\n');
+					fmt::Write::write_fmt(&mut i_buf, *args).expect("fmt error");
 				},
-				_ => (),
 			}
 
 			record
 				.key_values()
-				.visit(&mut KeyValueVisitor(indented))
+				.visit(&mut KeyValueVisitor(i_buf))
 				.expect("key value visitor failed");
 
 			buf.push('\n');
-			#[allow(unused_mut)]
-			let mut output = self.output.lock();
-			#[cfg(not(feature = "parking_lot"))]
-			let mut output = output.unwrap_or_else(|e| e.into_inner());
-			output.write_all(buf.as_bytes()).expect("io error");
+			self.output
+				.lock_ignore_poison()
+				.write_all(buf.as_bytes())
+				.expect("io error");
 		})
 	}
 }
 
-struct KeyValueVisitor<T: StringLike + fmt::Write>(Indented<T>);
+struct KeyValueVisitor<T>(Indented<T>);
 
-impl<'kvs, T: StringLike + fmt::Write> kv::VisitSource<'kvs> for KeyValueVisitor<T> {
+impl<'kvs, T> kv::VisitSource<'kvs> for KeyValueVisitor<T>
+where
+	T: StringLike + fmt::Write,
+{
 	fn visit_pair(&mut self, key: kv::Key<'kvs>, value: kv::Value<'kvs>) -> Result<(), kv::Error> {
 		let key_name = key.as_str();
 		self.0.reserve(key_name.len() + 3);
@@ -84,7 +86,10 @@ impl<'kvs, T: StringLike + fmt::Write> kv::VisitSource<'kvs> for KeyValueVisitor
 	}
 }
 
-impl<'v, T: StringLike + fmt::Write> kv::VisitValue<'v> for KeyValueVisitor<T> {
+impl<'v, T> kv::VisitValue<'v> for KeyValueVisitor<T>
+where
+	T: StringLike + fmt::Write,
+{
 	fn visit_any(&mut self, value: kv::Value) -> Result<(), kv::Error> {
 		fmt::Write::write_fmt(&mut self.0, format_args!("{value:?}"))
 			.map_err(|_| kv::Error::msg("fmt error"))

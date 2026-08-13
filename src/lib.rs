@@ -27,30 +27,31 @@
 compile_error!("at least one of 'log' or 'tracing' features must be enabled");
 
 mod compat;
-mod util;
-
+mod helpers;
 #[cfg(feature = "log")]
 mod log_impl;
 #[cfg(feature = "tracing")]
 mod tracing_impl;
+mod util;
 
+pub use crate::helpers::*;
 use crate::{
 	compat::{Level, Metadata},
 	util::StringLike,
 };
 use std::io;
+#[cfg(feature = "timestamps")]
+use std::time::SystemTime;
 
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
-#[cfg(feature = "timestamps")]
-use std::time::SystemTime;
 
 /// A tiny logger.
 #[non_exhaustive]
 #[derive(Debug)]
-pub struct Logger<T: io::Write + Send + Sync + 'static = io::Stdout> {
+pub struct Logger<T = io::Stdout> {
 	output: Mutex<T>,
 
 	/// Whether color should be enabled.
@@ -63,14 +64,46 @@ pub struct Logger<T: io::Write + Send + Sync + 'static = io::Stdout> {
 
 	/// The timezone to display timestamps in.
 	///
-	/// If `detect-timezone` is enabled, this defaults to the local timezone.
+	/// If `detect-timezone` is enabled, this defaults to the local timezone if available.
 	/// Otherwise, this defaults to UTC.
 	#[cfg(feature = "timestamps")]
 	pub timezone: time::UtcOffset,
 }
 
-impl Default for Logger<io::Stdout> {
-	fn default() -> Self {
+impl<T> Logger<T> {
+	/// Create a new [`Logger`] that writes to `output`.
+	pub fn new(output: T) -> Self {
+		Self {
+			output: Mutex::new(output),
+
+			color: cfg_select! {
+				feature = "detect-color" => {
+					supports_color::on(supports_color::Stream::Stdout)
+						.map(|i| i.has_basic)
+						.unwrap_or(false)
+				},
+				_ => false,
+			},
+
+			#[cfg(feature = "timestamps")]
+			timezone: cfg_select! {
+				feature = "detect-timezone" => {
+					time::UtcOffset::current_local_offset()
+						.unwrap_or(time::UtcOffset::UTC)
+				},
+				_ => time::UtcOffset::UTC,
+			},
+		}
+	}
+}
+
+impl Logger {
+	/// Equivalent to:
+	/// ```
+	/// Logger::new(std::io::stdout())
+	/// ```
+	#[allow(clippy::new_without_default)]
+	pub fn new_stdout() -> Self {
 		Self::new(io::stdout())
 	}
 }
@@ -82,41 +115,46 @@ struct PrefixOptions {
 	time: Option<SystemTime>,
 }
 
-impl<T: io::Write + Send + Sync + 'static> Logger<T> {
-	/// Create a new [`Logger`].
-	///
-	/// # Panics
-	/// Panics if there was an error getting the local timezone.
-	/// (Only if `detect-timezone` is enabled).
-	pub fn new(output: T) -> Self {
-		Self {
-			output: Mutex::new(output),
+impl<T> Logger<T>
+where
+	T: io::Write,
+{
+	const PREFIX_LABEL_LEN: usize = 8; // icon, space, label (5), space
 
-			#[cfg(not(feature = "detect-color"))]
-			color: false,
-
-			#[cfg(feature = "detect-color")]
-			color: supports_color::on(supports_color::Stream::Stdout)
-				.map(|i| i.has_basic)
-				.unwrap_or(false),
-
-			#[cfg(all(feature = "timestamps", feature = "detect-timezone"))]
-			timezone: time::UtcOffset::current_local_offset()
-				.expect("failed to get local utc offset"),
-
-			#[cfg(all(feature = "timestamps", not(feature = "detect-timezone")))]
-			timezone: time::UtcOffset::UTC,
-		}
-	}
-
-	/// Write the logging level, module info, and timestamp for a message.
+	/// Write the logging level, module info, and timestamp (if configured) for a message.
 	fn write_prefix<S: StringLike>(
 		&self,
 		output: &mut S,
 		meta: &Metadata,
 		options: &PrefixOptions,
 	) {
+		let mut reserve_len = Self::PREFIX_LABEL_LEN;
+
+		// approximate. :: gets replaced with / and we append a : and the line number
+		// assume bad case with no :: and line number with 4 digits
+		reserve_len += meta.module_path.len() + 5;
+
+		if cfg!(feature = "timestamps") {
+			// space + 00:00:00AM 0000/00/00
+			reserve_len += 22;
+		}
+
+		if self.color {
+			// unfortunately counted by hand. keep up to date!
+			reserve_len += 24;
+			if cfg!(feature = "timestamps") {
+				reserve_len += 5;
+			}
+		}
+
+		output.reserve(reserve_len);
+
+		if options.align && matches!(meta.level, Level::Info | Level::Warn) {
+			output.push(' ');
+		}
+
 		// https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
+
 		let (icon, level_str, color_code) = match meta.level {
 			Level::Trace => ('→', "trace", '5'),
 			Level::Debug => ('○', "debug", '6'),
@@ -124,10 +162,6 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 			Level::Warn => ('⚠', "warn", '3'),
 			Level::Error => ('✘', "error", '1'),
 		};
-
-		if options.align && matches!(meta.level, Level::Info | Level::Warn) {
-			output.push(' ');
-		}
 
 		// icon
 		if self.color {
@@ -139,11 +173,10 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		output.push(icon);
 
 		// level
+		output.push(' ');
 		if self.color {
 			// bold, underline
-			output.push_str(" \x1b[1;4m");
-		} else {
-			output.push(' ');
+			output.push_str("\x1b[1;4m");
 		}
 		output.push_str(level_str);
 
@@ -153,39 +186,40 @@ impl<T: io::Write + Send + Sync + 'static> Logger<T> {
 		if let Some(time) = options.time {
 			if self.color {
 				// reset, dim
-				output.push_str("\x1b[;2m ");
-			} else {
-				output.push(' ');
+				output.push_str("\x1b[;2m");
 			}
+			output.push(' ');
 
 			let time = time::OffsetDateTime::from(time).to_offset(self.timezone);
 
 			// this is the only place we ever format dates.
 			// time's formatting always allocates, so let's just do it manually instead.
 			let mut hour = time.hour();
-			let mut am_or_pm = "AM ";
-			if hour >= 12 {
-				am_or_pm = "PM ";
-				if hour != 12 {
+			let mut is_pm = false;
+			match hour {
+				0 => hour = 12,
+				13.. => {
 					hour -= 12;
-				}
-			}
+					is_pm = true;
+				},
+				_ => (),
+			};
 			output.push_str(int_buf.format(hour));
 			let minute = time.minute();
+			output.push(':');
 			if minute < 10 {
-				output.push_str(":0");
-			} else {
-				output.push(':');
+				output.push('0');
 			}
 			output.push_str(int_buf.format(minute));
 			let second = time.second();
+			output.push(':');
 			if second < 10 {
-				output.push_str(":0");
-			} else {
-				output.push(':');
+				output.push('0');
 			}
 			output.push_str(int_buf.format(second));
-			output.push_str(am_or_pm);
+			output.push(if is_pm { 'P' } else { 'A' });
+			output.push_str("M ");
+
 			output.push_str(int_buf.format(time.year()));
 			output.push('/');
 			output.push_str(int_buf.format(time.month() as u8));

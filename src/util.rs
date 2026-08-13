@@ -1,33 +1,30 @@
 use std::{cell::Cell, fmt};
 
 /// Operate on an empty, reused, thread-local string. Falls back to a new one if it isn't available.
-pub(super) fn with_local_string<F, R>(f: F) -> R
+pub(crate) fn with_local_string<F, R>(f: F) -> R
 where
 	F: FnOnce(&mut String) -> R,
 {
-	// I'd use RefCell, but lifetimes are hard when you're trying to avoid all panics.
 	thread_local! {
 		static GLOBAL_STR: Cell<Option<String>> = const { Cell::new(Some(String::new())) };
 	}
 
 	if let Some(mut s) = GLOBAL_STR.try_with(Cell::take).ok().flatten() {
+		s.clear();
 		let result = f(&mut s);
 
-		// If this fails, then our thread is probably shutting down.
-		// In that case it's fine for the shared string to be lost.
-		let _ = GLOBAL_STR.try_with(move |cell| {
-			s.clear();
-			cell.set(Some(s));
-		});
-
+		// If this fails, then our thread is shutting down. We can't do anything about it.
+		// We shouldn't panic here because we might be inside of another panic.
+		// Losing the string won't break anything.
+		let _ = GLOBAL_STR.try_with(move |cell| cell.set(Some(s)));
 		result
 	} else {
 		f(&mut String::new())
 	}
 }
 
-/// Similar to [`std::fmt::Write`], but with infallible methods.
-pub(super) trait StringLike {
+/// Similar to [`std::fmt::Write`], but with infallible methods and no `dyn`.
+pub(crate) trait StringLike {
 	/// Append a single character.
 	fn push(&mut self, c: char);
 	/// Append a string slice.
@@ -69,7 +66,7 @@ impl StringLike for String {
 
 /// Indents all text written to it by a certain amount.
 #[non_exhaustive]
-pub(super) struct Indented<T> {
+pub(crate) struct Indented<T> {
 	pub output: T,
 
 	/// How many spaces to indent by.
@@ -96,7 +93,7 @@ impl<T: StringLike> StringLike for Indented<T> {
 	}
 
 	fn push_str(&mut self, s: &str) {
-		let mut lines = s.split('\n');
+		let mut lines = s.lines();
 		if let Some(first_line) = lines.next() {
 			self.output.push_str(first_line);
 			for line in lines {
@@ -115,7 +112,10 @@ impl<T: StringLike> StringLike for Indented<T> {
 	}
 }
 
-impl<T: StringLike> fmt::Write for Indented<T> {
+impl<T> fmt::Write for Indented<T>
+where
+	T: StringLike,
+{
 	fn write_char(&mut self, c: char) -> std::fmt::Result {
 		self.push(c);
 		Ok(())
@@ -124,5 +124,32 @@ impl<T: StringLike> fmt::Write for Indented<T> {
 	fn write_str(&mut self, s: &str) -> std::fmt::Result {
 		self.push_str(s);
 		Ok(())
+	}
+}
+
+/// Helper trait to make it easier to switch between mutex types.
+pub(crate) trait MutexHelper<'a> {
+	type Output: 'a;
+	fn lock_ignore_poison(&'a self) -> Self::Output;
+}
+
+impl<'a, T> MutexHelper<'a> for std::sync::Mutex<T>
+where
+	T: 'a,
+{
+	type Output = std::sync::MutexGuard<'a, T>;
+	fn lock_ignore_poison(&'a self) -> Self::Output {
+		self.lock().unwrap_or_else(|e| e.into_inner())
+	}
+}
+
+#[cfg(feature = "parking_lot")]
+impl<'a, T> MutexHelper<'a> for parking_lot::Mutex<T>
+where
+	T: 'a,
+{
+	type Output = parking_lot::MutexGuard<'a, T>;
+	fn lock_ignore_poison(&'a self) -> Self::Output {
+		self.lock()
 	}
 }
