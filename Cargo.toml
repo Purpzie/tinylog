@@ -21,7 +21,7 @@ tracing = ["dep:tracing", "dep:tracing-subscriber"]
 [dependencies]
 itoa = {version = "1.0.3", default-features = false}
 log = {optional = true, version = "0.4.17", features = ["std", "kv"], default-features = false}
-parking_lot = {optional = true, version = "0.12.1", default-features = false}
+parking_lot = {optional = true, version = "0.13.0", default-features = false}
 zmij = {version = "1.0.21", default-features = false}
 supports-color = {optional = true, version = "3.0.0", default-features = false}
 time = {optional = true, version = "0.3.14", features = ["std"], default-features = false}
